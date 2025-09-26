@@ -50,6 +50,7 @@ APPS_SCRIPT_URL=your_apps_script_url_here
 
 ```bash
 npm run dev
+npx --yes netlify-cli@latest dev --port 8888
 ```
 
 http://localhost:3000 에서 확인

@@ -508,19 +508,51 @@
         })
         .catch(() => {});
 
+      // 이미지 압축 (JPEG, 최대 긴 변 768px)
+      async function compressImageToBase64(file, maxSize = 768, quality = 0.8) {
+        const img = await new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const image = new Image();
+          image.onload = () => resolve(image);
+          image.onerror = reject;
+          image.src = url;
+        });
+
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const targetW = Math.round(img.width * scale);
+        const targetH = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        return canvas.toDataURL("image/jpeg", quality);
+      }
+
       // 이미지 업로드 처리
       imageUpload.addEventListener("change", (event) => {
         const file = event.target.files[0];
         if (file) {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            uploadedImageBase64 = e.target.result;
-            imagePreview.src = uploadedImageBase64;
-            imagePreview.classList.remove("hidden");
-            uploadPlaceholder.classList.add("hidden");
-            nextButton.classList.remove("hidden");
-          };
-          reader.readAsDataURL(file);
+          compressImageToBase64(file, 768, 0.8)
+            .then((dataUrl) => {
+              uploadedImageBase64 = dataUrl;
+              imagePreview.src = uploadedImageBase64;
+              imagePreview.classList.remove("hidden");
+              uploadPlaceholder.classList.add("hidden");
+              nextButton.classList.remove("hidden");
+            })
+            .catch(() => {
+              // 폴백: 원본으로 표시만 진행
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                uploadedImageBase64 = e.target.result;
+                imagePreview.src = uploadedImageBase64;
+                imagePreview.classList.remove("hidden");
+                uploadPlaceholder.classList.add("hidden");
+                nextButton.classList.remove("hidden");
+              };
+              reader.readAsDataURL(file);
+            });
         }
       });
 
@@ -629,13 +661,17 @@
         switchView("loading-section");
         // 서버로 단일 요청 (create + analyze + update)
         try {
-          // 제출 직전 잠시 visitorId 대기
-          await waitForVisitorId(800);
+          // 제출 직전 잠시 visitorId 대기 (단축)
+          await waitForVisitorId(200);
           let persistedReferrer = "";
           try {
             persistedReferrer = localStorage.getItem("firstReferrer") || "";
           } catch (_) {}
 
+          const url = new URL(location.href);
+          const diagnostics = url.searchParams.get("diagnostics")
+            ? true
+            : false;
           const payload = {
             mode: "full",
             requestId,
@@ -650,6 +686,7 @@
             ua: window.__ua || "",
             lang: window.__lang || "",
             referrer: window.__referrer || persistedReferrer || "",
+            diagnostics,
           };
 
           const res = await fetch("/.netlify/functions/analyzeImage", {
@@ -665,15 +702,33 @@
           const result = data.result || data; // 호환 처리
 
           if (!result.isValid) {
-            showAlert(
-              result.reason ||
-                "앗! 실제 인물 사진을 넣어야 정확한 평가가 가능해요."
-            );
+            const urlParams = new URL(location.href).searchParams;
+            const diagnosticsOn = !!urlParams.get("diagnostics");
+            const reasonsArray = Array.isArray(result?.validation?.reasons)
+              ? result.validation.reasons.filter(Boolean)
+              : [];
+            const reasonsText = reasonsArray.length
+              ? `다음 이유로 부적합해요:\n- ${reasonsArray.join("\n- ")}`
+              : "앗! 실제 인물 사진을 넣어야 정확한 평가가 가능해요.";
+            const message =
+              result.reason || (diagnosticsOn ? reasonsText : reasonsText);
+            showAlert(message);
+            if (result.validation) {
+              console.log(
+                "[Diagnostics] Validation details:",
+                result.validation
+              );
+            }
             resetToUpload();
             return;
           }
 
           displayResults(result);
+          if (result.validation) {
+            console.log("[Diagnostics] Validation details:", result.validation);
+          }
+          // 결과 표시 직후 백그라운드로 시트 로깅 전송
+          enqueueSheetLogging(result);
         } catch (error) {
           console.error("Error during analysis:", error);
           showAlert(
@@ -771,6 +826,59 @@
 
         // UI 상태 변경: 결과
         switchView("result-section");
+      }
+
+      // 분석 결과를 시트로 비동기 전송 (이미지 제외)
+      function enqueueSheetLogging(analysis) {
+        try {
+          const name = document.getElementById("user-name").value;
+          const contact = document.getElementById("user-contact").value;
+          const consentChecked =
+            document.getElementById("contact-consent")?.checked;
+          const payload = {
+            action: "complete",
+            requestId,
+            name,
+            contact,
+            timestamp: new Date().toLocaleString("ko-KR"),
+            image: "", // 이미지 전송 생략(용량/지연 절감)
+            consent: !!consentChecked,
+            clientId: window.__clientId || "",
+            visitorId: window.__visitorId || "",
+            ip: window.__clientIp || "",
+            ua: window.__ua || "",
+            lang: window.__lang || "",
+            referrer: window.__referrer || "",
+          };
+          if (analysis?.isValid) {
+            payload.figureScore = analysis.figureScore;
+            payload.backgroundScore = analysis.backgroundScore;
+            payload.vibeScore = analysis.vibeScore;
+            payload.figureCritique = analysis.figureCritique;
+            payload.backgroundCritique = analysis.backgroundCritique;
+            payload.vibeCritique = analysis.vibeCritique;
+            payload.finalCritique = analysis.finalCritique;
+          }
+
+          const endpoint = "/.netlify/functions/logToAppsScript-background";
+          const blob = new Blob([JSON.stringify(payload)], {
+            type: "application/json",
+          });
+          let sent = false;
+          try {
+            if (navigator.sendBeacon) {
+              sent = navigator.sendBeacon(endpoint, blob);
+            }
+          } catch (_) {}
+          if (!sent) {
+            fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+              keepalive: true,
+            }).catch(() => {});
+          }
+        } catch (_) {}
       }
 
       // 커스텀 알림창 보이기

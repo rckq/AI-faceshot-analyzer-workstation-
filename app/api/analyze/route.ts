@@ -1,27 +1,19 @@
-exports.handler = async function (event) {
-  // CORS & preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-      body: "",
-    };
-  }
+import { NextRequest, NextResponse } from "next/server";
+import { logger } from "../../../lib/logger";
+
+export async function POST(request: NextRequest) {
   try {
-    const body = JSON.parse(event.body || "{}");
+    const body = await request.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
-    const appsScriptUrl = process.env.APPS_SCRIPT_URL; // Google Apps Script WebApp URL (optional)
+    const appsScriptUrl = process.env.APPS_SCRIPT_URL;
+    const correlationId = body?.requestId || crypto.randomUUID();
+
     if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "Missing GEMINI_API_KEY" }),
-      };
+      return NextResponse.json(
+        { error: "Missing GEMINI_API_KEY" },
+        { status: 500 }
+      );
     }
 
     const primaryModel = process.env.GEMINI_MODEL || "gemini-1.5-flash-latest";
@@ -66,32 +58,18 @@ exports.handler = async function (event) {
         },
       };
 
+      logger.info("gemini:request", { requestId: correlationId });
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      let result = await response.json();
-      if (!response.ok && result?.error?.status === "NOT_FOUND") {
-        // 모델 접근 불가 → 폴백 모델로 재시도
-        const fbUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
-        const fbResp = await fetch(fbUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const fbJson = await fbResp.json();
-        return {
-          statusCode: fbResp.status,
-          headers: { "Access-Control-Allow-Origin": "*" },
-          body: JSON.stringify(fbJson),
-        };
-      }
-      return {
-        statusCode: response.ok ? 200 : response.status,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify(result),
-      };
+      const result = await response.json();
+      logger.info("gemini:response", {
+        requestId: correlationId,
+        status: response.status,
+      });
+      return NextResponse.json(result, { status: response.status });
     }
 
     // Integrated flow: create (sheet) -> analyze -> update (sheet)
@@ -113,25 +91,26 @@ exports.handler = async function (event) {
     } = body;
 
     if (mode !== "full") {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
+      return NextResponse.json(
+        {
           error:
             "Invalid request: expected mode 'full' or {prompt,imageBase64}",
-        }),
-      };
-    }
-    if (!imageBase64 || !requestId || !name || !contact) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
-          error:
-            "Missing required fields (imageBase64, requestId, name, contact)",
-        }),
-      };
+        },
+        { status: 400 }
+      );
     }
 
-    // 1) Analyze via Gemini (우선 실행 - 사용자 대기시간 최소화)
+    if (!imageBase64 || !requestId || !name || !contact) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing required fields (imageBase64, requestId, name, contact)",
+        },
+        { status: 400 }
+      );
+    }
+
+    // 1) Analyze via Gemini
     const diagnosticsEnabled = !!diagnostics;
     const combinedPrompt = (
       diagnosticsEnabled
@@ -153,7 +132,7 @@ Follow the rules strictly and respond with JSON only.
     "faceOcclusionSeverity": number (0~1),
     "imageQualityScore": integer (0~100),
     "excessiveFilterLikelihood": number (0~1),
-    "reasons": string[] // concise Korean bullet points explaining key factors
+    "reasons": string[]
   }
 - If invalid, return:
 {
@@ -238,12 +217,13 @@ Follow the rules strictly and respond with JSON only.
       generationConfig: {
         temperature: 0.2,
         topP: 0.8,
-        maxOutputTokens,
+        maxOutputTokens: 256,
         responseMimeType: "application/json",
       },
     };
 
-    const response = await fetch(apiUrl, {
+    logger.info("gemini:request", { requestId });
+    let response = await fetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -251,23 +231,18 @@ Follow the rules strictly and respond with JSON only.
     let gemini = await response.json();
     if (!response.ok && gemini?.error?.status === "NOT_FOUND") {
       const fbUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${apiKey}`;
-      const fbResp = await fetch(fbUrl, {
+      response = await fetch(fbUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      gemini = await fbResp.json();
-      return {
-        statusCode: fbResp.status,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify(gemini),
-      };
-    } else if (!response.ok) {
-      return {
-        statusCode: response.status,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify(gemini),
-      };
+      gemini = await response.json();
+    }
+    logger.info("gemini:response", { requestId, status: response.status });
+
+    if (!response.ok) {
+      // 상류 오류를 그대로 전달해 디버깅/재시도 전략 수립을 용이하게
+      return NextResponse.json(gemini, { status: response.status });
     }
 
     const text = gemini?.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -276,26 +251,69 @@ Follow the rules strictly and respond with JSON only.
     try {
       analysisResult = JSON.parse(jsonText);
     } catch (_) {
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "Invalid Gemini response", raw: gemini }),
-      };
+      return NextResponse.json(gemini, { status: 502 });
     }
 
     // 2) 시트 저장은 클라이언트에서 결과 표시 직후 비동기 전송하도록 위임
+    if (appsScriptUrl) {
+      try {
+        const bgPayload: Record<string, any> = {
+          action: "complete",
+          requestId,
+          name,
+          contact,
+          timestamp: timestamp || new Date().toLocaleString("ko-KR"),
+          // image는 전송 생략(용량/지연 절감)
+          consent: consent ? "Y" : "N",
+          clientId: clientId || "",
+          visitorId: visitorId || "",
+          ip: ip || "",
+          ua: ua || "",
+          lang: lang || "",
+          referrer: referrer || "",
+        };
 
-    return {
-      statusCode: 200,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ ok: true, result: analysisResult }),
-    };
+        if (analysisResult?.isValid) {
+          bgPayload.figureScore = analysisResult.figureScore;
+          bgPayload.backgroundScore = analysisResult.backgroundScore;
+          bgPayload.vibeScore = analysisResult.vibeScore;
+          bgPayload.figureCritique = analysisResult.figureCritique;
+          bgPayload.backgroundCritique = analysisResult.backgroundCritique;
+          bgPayload.vibeCritique = analysisResult.vibeCritique;
+          bgPayload.finalCritique = analysisResult.finalCritique;
+        }
+
+        const baseUrl =
+          process.env.NEXT_PUBLIC_SITE_URL || request.nextUrl.origin;
+        // 기다리지 않고 비동기 전송 시도 (실패해도 사용자 응답에는 영향 없음)
+        void fetch(`${baseUrl}/api/log-to-sheet`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bgPayload),
+        }).catch(() => {});
+      } catch (e) {
+        logger.error("sheet-log:enqueue-exception", {
+          requestId,
+          error: (e as Error)?.message,
+        });
+      }
+    }
+
+    return NextResponse.json(
+      { ok: true, result: analysisResult },
+      { headers: { "X-Request-Id": requestId } }
+    );
   } catch (error) {
-    console.error("Function Error:", error);
-    return {
-      statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ error: error.message }),
-    };
+    const requestId = crypto.randomUUID();
+    logger.error("api:exception", {
+      requestId,
+      error: (error as Error)?.message || "Unknown error",
+    });
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500, headers: { "X-Request-Id": requestId } }
+    );
   }
-};
+}

@@ -13,6 +13,14 @@ const nextConfig = {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     APPS_SCRIPT_URL: process.env.APPS_SCRIPT_URL,
   },
+  async rewrites() {
+    return [
+      {
+        source: "/favicon.ico",
+        destination: "/icon.svg",
+      },
+    ];
+  },
 };
 
 export default nextConfig;

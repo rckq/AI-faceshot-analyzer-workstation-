@@ -127,23 +127,56 @@ function doPost(e) {
         console.log("Row data to insert:", JSON.stringify(rowMap, null, 2));
 
         // 헤더 별칭 처리 (대소문자/오탈자 허용)
-        const alias = {
-          요청Id: "요청ID",
-          "Request ID": "요청ID",
-          requestId: "요청ID",
-          visitorID: "visitorId",
-          VisitorId: "visitorId",
-          Referrer: "referrer",
-        };
+ // 헤더 정규화 후 인덱스 매핑
+const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+.map((h) => String(h || "").trim());
+const norm = (s) => String(s || "").replace(/\s+/g, "").toLowerCase();
+const headerIndex = Object.fromEntries(headers.map((h, i) => [norm(h), i]));
 
-        const row = headers.map((h) => {
-          const key = Object.prototype.hasOwnProperty.call(rowMap, h)
-            ? h
-            : alias[h] || h;
-          return rowMap[key] ?? "";
-        });
+// 숫자 강제(숫자 아니면 빈칸)
+const toInt = (v) => {
+const n = parseInt(v, 10);
+return Number.isFinite(n) ? n : "";
+};
 
-        sheet.appendRow(row);
+// 행 버퍼와 셀 쓰기 도우미
+const row = new Array(headers.length).fill("");
+function put(headerName, value) {
+const idx = headerIndex[norm(headerName)];
+if (idx >= 0) row[idx] = value ?? "";
+}
+
+// 정확 매핑(시트 헤더 기준)
+put("요청ID", p.requestId || "");
+put("타임스탬프", timestamp || new Date().toLocaleString("ko-KR"));
+put("이름", name || "");
+put("연락처", contact || "");
+put("이미지 URL", imageUrl || "");
+put("최종 한줄평", finalCritique || "");
+
+// 점수(숫자 강제)
+put("인물", toInt(figureScore));
+put("배경", toInt(backgroundScore));
+put("감성", toInt(vibeScore));
+
+// 코멘트
+put("인물 코멘트", figureCritique || "");
+put("배경 코멘트", backgroundCritique || "");
+put("감성 코멘트", vibeCritique || "");
+
+// 메타
+put("visitorId", p.visitorId || "");
+put("clientId", p.clientId || "");
+put("ip", p.ip || "");
+put("ua", p.ua || "");
+put("lang", p.lang || "");
+put("referrer", p.referrer || "");
+put("동의", consent || "N");
+put("상태", figureScore ? "DONE" : "PENDING");
+put("업데이트시각", new Date().toLocaleString("ko-KR"));
+
+// 시트 기록
+sheet.appendRow(row);
       } finally {
         lock.releaseLock();
       }

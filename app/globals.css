@@ -1,0 +1,123 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(253, 242, 248);
+}
+
+/* 메인 타이틀 반응형 스타일 */
+.main-title {
+  font-size: clamp(0.9rem, 6.5vw, 3rem);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* 메인 컨테이너 - 중앙 정렬 보장 */
+.main-container {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  background: white;
+  border-radius: 1.5rem;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 전체 래퍼 */
+.app-wrapper {
+  width: 100%;
+  max-width: 400px;
+  margin: 1rem;
+}
+
+/* 반응형 컨테이너 너비 */
+@media (min-width: 480px) {
+  .app-wrapper,
+  .main-container {
+    max-width: 480px;
+  }
+}
+@media (min-width: 640px) {
+  .app-wrapper,
+  .main-container {
+    max-width: 560px;
+  }
+}
+@media (min-width: 768px) {
+  .app-wrapper,
+  .main-container {
+    max-width: 640px;
+  }
+}
+@media (min-width: 1024px) {
+  .app-wrapper,
+  .main-container {
+    max-width: 720px;
+  }
+}
+@media (min-width: 1280px) {
+  .app-wrapper,
+  .main-container {
+    max-width: 800px;
+  }
+}
+
+/* 귀여운 로딩 애니메이션 */
+.bouncing-loader {
+  display: flex;
+  justify-content: center;
+}
+.bouncing-loader > div {
+  width: 20px;
+  height: 20px;
+  margin: 3px 6px;
+  border-radius: 50%;
+  background-color: #fca5a5; /* red-300 */
+  opacity: 1;
+  animation: bouncing-loader 0.8s infinite alternate;
+}
+.bouncing-loader > div:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.bouncing-loader > div:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes bouncing-loader {
+  to {
+    opacity: 0.1;
+    transform: translateY(-16px);
+  }
+}
+
+/* 결과 점수 바 애니메이션 */
+@keyframes fill-bar {
+  from {
+    width: 0%;
+  }
+  to {
+    width: var(--target-width);
+  }
+}
+.score-bar-fill {
+  animation: fill-bar 1.5s ease-out forwards;
+}
+
+/* 화면 전환 효과 */
+.view-section {
+  transition: opacity 0.5s ease-in-out, transform 0.5s ease-in-out;
+}
+.view-section.hidden {
+  opacity: 0;
+  transform: scale(0.95);
+  pointer-events: none;
+  position: absolute;
+}
