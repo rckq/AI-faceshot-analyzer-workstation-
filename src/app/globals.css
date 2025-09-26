@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-gamja m-0 p-0 min-h-screen flex items-center justify-center bg-pink-50;
+  }
+}
+
+@layer components {
+  /* 뷰 섹션 전환 애니메이션 */
+  .view-section {
+    @apply transition-all duration-500 ease-in-out;
+  }
+
+  .view-section.hidden {
+    @apply opacity-0 scale-95 pointer-events-none absolute;
+  }
+
+  /* 점수 바 애니메이션 */
+  .score-bar-fill {
+    animation: fill-bar 1.5s ease-out forwards;
+  }
+
+  @keyframes fill-bar {
+    from {
+      width: 0%;
+    }
+    to {
+      width: var(--target-width);
+    }
+  }
+}
